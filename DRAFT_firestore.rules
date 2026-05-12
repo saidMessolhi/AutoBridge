@@ -1,0 +1,135 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function getUser(userId) {
+      // Note: Users are at /tenants/{tenantId}/users/{userId}
+      // To find the tenantId of the current user during a request, 
+      // we usually need a dedicated /profiles/{userId} or similar if we don't know the tenantId from the path.
+      // Alternatively, we verify that the path variable tenantId matches the user's document.
+      return get(/databases/$(database)/documents/profiles/$(userId)).data;
+    }
+
+    function isMemberOfTenant(tenantId) {
+      return isSignedIn() && exists(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid));
+    }
+
+    function getRole(tenantId) {
+       return get(/databases/$(database)/documents/tenants/$(tenantId)/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin(tenantId) {
+      return isMemberOfTenant(tenantId) && getRole(tenantId) == 'ADMIN';
+    }
+
+    function isStaff(tenantId) {
+       return isMemberOfTenant(tenantId) && getRole(tenantId) in ['RECEPTION', 'CHINA_OFFICER', 'ACCOUNTANT', 'LOGISTICS', 'CUSTOMS', 'ADMIN'];
+    }
+
+    // --- Validations ---
+
+    function isValidUser(data) {
+      return data.email is string && data.email.size() <= 200
+        && data.name is string && data.name.size() <= 100
+        && data.role is string && data.role in ['CLIENT', 'RECEPTION', 'CHINA_OFFICER', 'ACCOUNTANT', 'LOGISTICS', 'CUSTOMS', 'ADMIN']
+        && data.tenantId is string && data.tenantId.size() <= 128
+        && data.createdAt == request.time;
+    }
+
+    function isValidOrder(data) {
+      return data.clientId is string && isValidId(data.clientId)
+        && data.tenantId is string && isValidId(data.tenantId)
+        && data.vehicleDetails is map
+        && data.vehicleDetails.make is string && data.vehicleDetails.make.size() <= 100
+        && data.vehicleDetails.model is string && data.vehicleDetails.model.size() <= 100
+        && data.vehicleDetails.year is int && data.vehicleDetails.year >= 1900
+        && data.currentStage is string
+        && data.createdAt == request.time
+        && data.updatedAt == request.time;
+    }
+
+    // --- Match Rules ---
+
+    match /tenants/{tenantId} {
+      allow get: if isSignedIn() && isMemberOfTenant(tenantId);
+      
+      match /users/{userId} {
+        allow get: if isSignedIn() && (request.auth.uid == userId || isStaff(tenantId));
+        allow list: if isSignedIn() && isStaff(tenantId) && resource.data.tenantId == tenantId;
+        
+        allow create: if isSignedIn() && isValidUser(incoming()) && (
+          // Allow bootstrapping the first admin for a tenant
+          // In a real SaaS, this would be restricted to a server-side creation
+          incoming().tenantId == tenantId && incoming().role == 'ADMIN' && userId == request.auth.uid
+        );
+        
+        allow update: if isSignedIn() && isMemberOfTenant(tenantId) && (
+          (request.auth.uid == userId && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'email'])) ||
+          (isAdmin(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['role']))
+        );
+      }
+
+      match /import_orders/{orderId} {
+        allow get: if isSignedIn() && isMemberOfTenant(tenantId) && (
+          existing().clientId == request.auth.uid || isStaff(tenantId)
+        );
+        allow list: if isSignedIn() && isMemberOfTenant(tenantId) && (
+          resource.data.clientId == request.auth.uid || isStaff(tenantId)
+        );
+
+        allow create: if isSignedIn() && isMemberOfTenant(tenantId) && (
+          isValidOrder(incoming()) && (
+            (getRole(tenantId) == 'CLIENT' && incoming().clientId == request.auth.uid) ||
+            isStaff(tenantId)
+          )
+        );
+
+        allow update: if isSignedIn() && isMemberOfTenant(tenantId) && (
+          isValidOrder(incoming()) && (
+            existing().currentStage != 'DELIVERED' && (
+              // Action: Progress Stage
+              (isStaff(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['currentStage', 'updatedAt'])) ||
+              // Action: Update Vehicle Details (Admin/Client if early)
+              (isAdmin(tenantId) && incoming().diff(existing()).affectedKeys().hasOnly(['vehicleDetails', 'updatedAt']))
+            )
+          )
+        );
+      }
+
+      match /import_orders/{orderId}/documents/{docId} {
+        allow read: if isSignedIn() && isMemberOfTenant(tenantId);
+        allow write: if isSignedIn() && isStaff(tenantId) && exists(/databases/$(database)/documents/tenants/$(tenantId)/import_orders/$(orderId));
+      }
+
+      match /import_orders/{orderId}/payments/{paymentId} {
+        allow read: if isSignedIn() && isMemberOfTenant(tenantId) && (
+           get(/databases/$(database)/documents/tenants/$(tenantId)/import_orders/$(orderId)).data.clientId == request.auth.uid || 
+           isStaff(tenantId)
+        );
+        allow write: if isSignedIn() && isStaff(tenantId);
+      }
+    }
+  }
+}

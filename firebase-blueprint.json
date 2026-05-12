@@ -1,0 +1,104 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "User profile information within a tenant",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email" },
+        "name": { "type": "string" },
+        "role": { "type": "string", "enum": ["CLIENT", "RECEPTION", "CHINA_OFFICER", "ACCOUNTANT", "LOGISTICS", "CUSTOMS", "ADMIN"] },
+        "tenantId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "name", "role", "tenantId", "createdAt"]
+    },
+    "ImportOrder": {
+      "title": "Import Order",
+      "description": "Main import order document",
+      "type": "object",
+      "properties": {
+        "clientId": { "type": "string" },
+        "tenantId": { "type": "string" },
+        "vehicleDetails": {
+          "type": "object",
+          "properties": {
+            "make": { "type": "string" },
+            "model": { "type": "string" },
+            "year": { "type": "number" },
+            "budget": { "type": "number" },
+            "color": { "type": "string" },
+            "specs": { "type": "string" },
+            "vin": { "type": "string" }
+          }
+        },
+        "currentStage": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["clientId", "tenantId", "vehicleDetails", "currentStage", "createdAt", "updatedAt"]
+    },
+    "OrderDocument": {
+      "title": "Order Document",
+      "description": "A document associated with an import order",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "url": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["name", "type", "url", "uploadedBy", "createdAt"]
+    },
+    "Payment": {
+      "title": "Payment Record",
+      "description": "Financial transaction related to an order",
+      "type": "object",
+      "properties": {
+        "amount": { "type": "number" },
+        "type": { "type": "string", "enum": ["DEPOSIT", "FINAL", "CUSTOMS", "SHIPPING"] },
+        "status": { "type": "string", "enum": ["PENDING", "PAID", "VERIFIED"] },
+        "method": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["amount", "type", "status", "method", "createdAt"]
+    },
+    "TrackingEvent": {
+      "title": "Tracking Event",
+      "description": "A historical log of an order stage movement",
+      "type": "object",
+      "properties": {
+        "stage": { "type": "string" },
+        "status": { "type": "string" },
+        "description": { "type": "string" },
+        "location": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" }
+      },
+      "required": ["stage", "status", "description", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/tenants/{tenantId}/users/{userId}": {
+      "schema": "User",
+      "description": "Users belonging to a specific tenant"
+    },
+    "/tenants/{tenantId}/import_orders/{orderId}": {
+      "schema": "ImportOrder",
+      "description": "Import orders grouped by tenant"
+    },
+    "/tenants/{tenantId}/import_orders/{orderId}/documents/{docId}": {
+      "schema": "OrderDocument",
+      "description": "Documents for a specific order"
+    },
+    "/tenants/{tenantId}/import_orders/{orderId}/payments/{paymentId}": {
+      "schema": "Payment",
+      "description": "Payments for a specific order"
+    },
+    "/tenants/{tenantId}/import_orders/{orderId}/tracking/{eventId}": {
+      "schema": "TrackingEvent",
+      "description": "Tracking history for a specific order"
+    }
+  }
+}
