@@ -15,6 +15,7 @@ import {
   LogOut
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
+import { dbSync } from '../../services/dbSync';
 import { OrderLifecycle } from '../../components/orders/OrderLifecycle';
 import { ImportStage } from '../../types';
 import { DocumentCenter } from '../../components/documents/DocumentCenter';
@@ -23,6 +24,8 @@ export function ClientPortal() {
   const navigate = useNavigate();
   const [user, setUser] = React.useState<any>(null);
   const [order, setOrder] = React.useState<any>(null);
+  const [notifications, setNotifications] = React.useState<any[]>([]);
+  const [isNotificationsOpen, setIsNotificationsOpen] = React.useState(false);
 
   React.useEffect(() => {
     const savedUser = localStorage.getItem('mockUser');
@@ -34,19 +37,106 @@ export function ClientPortal() {
     const userData = JSON.parse(savedUser);
     setUser(userData);
 
-    const savedOrders = localStorage.getItem('import_orders');
-    if (savedOrders && userData.orderId) {
-      const orders = JSON.parse(savedOrders);
-      const userOrder = orders.find((o: any) => o.id === userData.orderId);
+    // Subscribe to real-time sync for client order updates from anywhere
+    const unsubscribe = dbSync.subscribeToOrders((allOrders) => {
+      let userOrder = null;
+      if (userData.orderId) {
+        userOrder = allOrders.find((o: any) => o.id === userData.orderId);
+      }
+      
+      // Fallback matching by email, username, or client name
+      if (!userOrder) {
+        userOrder = allOrders.find((o: any) => 
+          o.email === userData.email || 
+          o.portalUsername === userData.email ||
+          o.client === userData.name
+        );
+      }
+
       if (userOrder) {
         setOrder(userOrder);
+        
+        // If orderId was missing, persist it to localStorage mockUser
+        if (!userData.orderId) {
+          const updatedUser = { ...userData, orderId: userOrder.id };
+          localStorage.setItem('mockUser', JSON.stringify(updatedUser));
+          setUser(updatedUser);
+        }
       }
+    });
+
+    // Notify updates if orderId is resolved
+    let unsubscribeNotifs = () => {};
+    const targetOrderId = userData.orderId || '';
+    if (targetOrderId) {
+      unsubscribeNotifs = dbSync.subscribeToNotifications(userData, (allNotifs) => {
+        setNotifications(allNotifs);
+      });
+    } else {
+      // Dynamic fallback for notifications once order is resolved/set
+      const checkAndUnsub = setInterval(() => {
+        const saved = localStorage.getItem('mockUser');
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.orderId) {
+            clearInterval(checkAndUnsub);
+            unsubscribeNotifs = dbSync.subscribeToNotifications(parsed, (allNotifs) => {
+              setNotifications(allNotifs);
+            });
+          }
+        }
+      }, 1000);
+      
+      const originalUnsub = unsubscribeNotifs;
+      unsubscribeNotifs = () => {
+        clearInterval(checkAndUnsub);
+        originalUnsub();
+      };
     }
+
+    return () => {
+      unsubscribe();
+      unsubscribeNotifs();
+    };
   }, [navigate]);
 
   const handleLogout = () => {
     localStorage.removeItem('mockUser');
     navigate('/login');
+  };
+
+  const unreadCount = React.useMemo(() => {
+    return notifications.filter(n => !n.read).length;
+  }, [notifications]);
+
+  const handleMarkAllRead = async () => {
+    if (user) {
+      await dbSync.markAllNotificationsAsRead(user);
+    }
+  };
+
+  const handleMarkRead = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await dbSync.markNotificationAsRead(id);
+  };
+
+  const getStageProgress = (stage: string) => {
+    switch (stage) {
+      case 'NEW_REQUEST': return 5;
+      case 'UNDER_REVIEW': return 15;
+      case 'SEARCHING_CAR': return 25;
+      case 'CLIENT_APPROVED': return 35;
+      case 'DEPOSIT_PAID': return 45;
+      case 'PURCHASED': return 55;
+      case 'INLAND_TRANSPORT': return 65;
+      case 'SHIPPED': return 75;
+      case 'IN_TRANSIT': return 82;
+      case 'ARRIVED_PORT': return 88;
+      case 'CUSTOMS_CLEARANCE': return 92;
+      case 'FINAL_PAYMENT': return 96;
+      case 'DELIVERED': return 100;
+      default: return 40;
+    }
   };
 
   if (!user) return null;
@@ -64,10 +154,83 @@ export function ClientPortal() {
                </div>
             </div>
             <div className="flex items-center gap-6">
-               <button className="relative p-2 text-white/60 hover:text-white">
-                  <Bell className="w-5 h-5" />
-                  <span className="absolute top-1.5 right-1.5 w-1.5 h-1.5 bg-blue-500 rounded-full"></span>
-               </button>
+               <div className="relative">
+                  <button 
+                    onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                    className="relative p-2 text-white/60 hover:text-white transition-transform active:scale-95"
+                  >
+                     <Bell className="w-5 h-5" />
+                     {unreadCount > 0 && (
+                        <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 rounded-full text-[9px] font-black text-white flex items-center justify-center border border-brand-dark">
+                          {unreadCount}
+                        </span>
+                     )}
+                  </button>
+
+                  {isNotificationsOpen && (
+                    <>
+                      <div 
+                        className="fixed inset-0 z-40" 
+                        onClick={() => setIsNotificationsOpen(false)}
+                      />
+                      <div className="absolute left-0 mt-3 w-80 sm:w-96 bg-white border border-slate-100 rounded-2xl shadow-2xl z-50 overflow-hidden leading-snug">
+                        <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center text-slate-800">
+                          <div className="flex items-center gap-2">
+                            <span className="font-extrabold text-xs">إشعارات التتبع الخاص بك</span>
+                            {unreadCount > 0 && (
+                              <span className="bg-red-50 text-red-600 text-[9px] font-black px-1.5 py-0.5 rounded-full border border-red-100">
+                                {unreadCount} جديد
+                              </span>
+                            )}
+                          </div>
+                          {unreadCount > 0 && (
+                            <button 
+                              onClick={handleMarkAllRead}
+                              className="text-[10px] font-bold text-blue-600 hover:underline"
+                            >
+                              تعيين الكل كمقروء
+                            </button>
+                          )}
+                        </div>
+
+                        <div className="max-h-80 overflow-y-auto divide-y divide-gray-50 text-slate-800">
+                          {notifications.length > 0 ? (
+                            notifications.map((notif) => (
+                              <div 
+                                key={notif.id} 
+                                className={cn(
+                                  "p-4 hover:bg-slate-50/50 transition-colors flex gap-3 text-right leading-relaxed",
+                                  !notif.read ? "bg-slate-50/40" : ""
+                                )}
+                              >
+                                <div className="flex-1">
+                                  <div className="flex justify-between items-start gap-2">
+                                    <h5 className={cn("text-xs font-black", !notif.read ? "text-slate-900" : "text-slate-700")}>{notif.title}</h5>
+                                    <span className="text-[8px] text-slate-400 font-mono tracking-tighter whitespace-nowrap">{notif.date}</span>
+                                  </div>
+                                  <p className="text-[10px] text-slate-500 mt-1">{notif.message}</p>
+                                  
+                                  {!notif.read && (
+                                    <button 
+                                      onClick={(e) => handleMarkRead(notif.id, e)}
+                                      className="text-[9px] font-bold text-blue-600 mt-1.5 hover:underline block"
+                                    >
+                                      ✓ تعليم كقروء
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))
+                          ) : (
+                            <div className="p-8 text-center text-xs text-slate-400 font-medium">
+                              لا توجد إشعارات حالياً
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </>
+                  )}
+               </div>
                <div className="flex items-center gap-3 border-r pr-6 border-white/10">
                   <div className="text-left leading-none">
                      <p className="text-sm font-bold">{user.name}</p>
@@ -132,33 +295,48 @@ export function ClientPortal() {
                           <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
                              <div 
                               className="h-full bg-blue-600 transition-all duration-500" 
-                              style={{ width: `${order.stage === ImportStage.DELIVERED ? 100 : 65}%` }} 
+                              style={{ width: `${getStageProgress(order.stage)}%` }} 
                              />
                           </div>
-                          <span className="text-[10px] font-black text-blue-600">{order.stage === ImportStage.DELIVERED ? '100%' : '65%'}</span>
+                          <span className="text-[10px] font-black text-blue-600">{getStageProgress(order.stage)}%</span>
                        </div>
                     </div>
   
                     <div className="lg:w-80 bg-slate-900 rounded-xl p-6 text-white relative overflow-hidden">
                        <div className="absolute -top-4 -right-4 w-24 h-24 bg-white/5 rounded-full blur-2xl"></div>
-                       <div className="relative z-10 space-y-6">
-                          <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40">بيانات التكلفة</h4>
+                       <div className="relative z-10 space-y-4">
+                          <h4 className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/40 border-b border-white/5 pb-2">بيانات التكلفة المعتمدة للفاتورة</h4>
                           <div className="space-y-1">
-                             <p className="text-xs text-white/60">إجمالي الطلب</p>
-                             <p className="text-2xl font-black text-white tracking-tighter">${order.price || '0.00'}</p>
+                             <p className="text-xs text-white/60">إجمالي الطلب بالدولار</p>
+                             <p className="text-xl font-black text-white tracking-tighter">${order.price || '0.00'}</p>
                           </div>
-                          <div className="space-y-3">
-                             <div className="flex justify-between text-[10px]">
+                          <div className="space-y-1 border-t border-white/5 pt-2">
+                             <p className="text-xs text-white/60">القيمة الإجمالية بالدينار الجزائري</p>
+                             <p className="text-lg font-extrabold text-blue-400 tracking-tight">{((Number(order.price) || 0) * (Number(order.exchangeRate) || 220)).toLocaleString('ar-DZ')} دج</p>
+                             <p className="text-[9px] text-white/40">سعر الصرف المحجوز للطلب: 1$ = {order.exchangeRate || 220} دج</p>
+                          </div>
+                          <div className="space-y-1 border-t border-white/5 pt-2 text-[10px] space-y-1 text-white/60">
+                             <div className="flex justify-between">
+                                <span>العربون (30%):</span>
+                                <span className="font-bold text-emerald-400">{Math.round((Number(order.price) || 0) * (Number(order.exchangeRate) || 220) * 0.3).toLocaleString('ar-DZ')} دج</span>
+                             </div>
+                             <div className="flex justify-between">
+                                <span>المتبقي (70%):</span>
+                                <span className="font-bold text-amber-400">{Math.round((Number(order.price) || 0) * (Number(order.exchangeRate) || 220) * 0.7).toLocaleString('ar-DZ')} دج</span>
+                             </div>
+                          </div>
+                          <div className="space-y-3 pt-2 text-[10px] border-t border-white/5">
+                             <div className="flex justify-between">
                                 <span>حالة الملف</span>
                                 <span className="text-emerald-400 font-bold uppercase">{order.stage}</span>
                              </div>
-                             <div className="flex justify-between text-[10px] text-white/40">
+                             <div className="flex justify-between">
                                 <span>المصدر</span>
                                 <span>{order.source}</span>
                              </div>
                           </div>
                           <button className="w-full py-3 bg-blue-600 text-white rounded-lg text-[10px] font-bold uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/50">
-                             عرض التفاصيل
+                             عرض التفاصيل والالتزام
                           </button>
                        </div>
                     </div>
@@ -179,7 +357,7 @@ export function ClientPortal() {
 
          {/* Document Center Section */}
          <section className="space-y-6">
-            <DocumentCenter />
+            <DocumentCenter orderId={order?.id} />
          </section>
   
          {/* Quick Actions Grid */}

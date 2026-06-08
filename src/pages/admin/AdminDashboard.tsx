@@ -7,6 +7,7 @@ import { CredentialsModal } from '../../components/orders/CredentialsModal';
 import { OrderLifecycle } from '../../components/orders/OrderLifecycle';
 import { ImportStage } from '../../types';
 import { cn, canUserSeeOrder } from '../../lib/utils';
+import { dbSync } from '../../services/dbSync';
 import { 
   Plus, 
   Search, 
@@ -23,6 +24,8 @@ export function AdminDashboard() {
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [showCredentials, setShowCredentials] = React.useState<any>(null);
   const [orders, setOrders] = React.useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = React.useState('');
+  const [exchangeRate, setExchangeRate] = React.useState<number>(220);
   
   React.useEffect(() => {
     const savedUser = localStorage.getItem('mockUser');
@@ -32,24 +35,23 @@ export function AdminDashboard() {
       setUserRole(role);
     }
 
-    const savedOrders = localStorage.getItem('import_orders');
-    let allOrders = [];
-    if (savedOrders) {
-      allOrders = JSON.parse(savedOrders);
-    } else {
-      allOrders = [
-        { id: '1', client: 'محمد فوزي', car: 'Geely Monjaro 2024', stage: ImportStage.IN_TRANSIT, date: '08/05/2024' },
-        { id: '2', client: 'ياسين كريم', car: 'BYD Seal Premium', stage: ImportStage.PURCHASED, date: '07/05/2024' },
-      ];
-      localStorage.setItem('import_orders', JSON.stringify(allOrders));
-    }
+    // Subscribe to real-time orders in Firestore with safe local fallback
+    const unsubscribeOrders = dbSync.subscribeToOrders((allOrders) => {
+      const filtered = allOrders.filter((order: any) => canUserSeeOrder(role, order.stage));
+      setOrders(filtered);
+    });
 
-    // Filter orders based on role
-    const filtered = allOrders.filter((order: any) => canUserSeeOrder(role, order.stage));
-    setOrders(filtered);
+    const unsubscribeRate = dbSync.subscribeToExchangeRate((currentRate) => {
+      setExchangeRate(currentRate);
+    });
+
+    return () => {
+      unsubscribeOrders();
+      unsubscribeRate();
+    };
   }, []);
 
-  const handleSaveOrder = (data: any) => {
+  const handleSaveOrder = async (data: any) => {
     const orderId = Math.random().toString(36).substr(2, 9);
     // Use email as username if provided
     const username = data.email || `u${data.phone1?.slice(-6) || Math.floor(1000 + Math.random() * 9000)}`;
@@ -62,14 +64,11 @@ export function AdminDashboard() {
       portalUsername: username
     };
     
-    const updatedOrders = [newOrder, ...orders];
-    setOrders(updatedOrders);
-    localStorage.setItem('import_orders', JSON.stringify(updatedOrders));
+    // Save to Firestore real-time (will automatically propagate to the lists)
+    await dbSync.saveOrder(newOrder);
 
-    // Save to portal users
-    const savedAccounts = localStorage.getItem('portal_users');
-    const accounts = savedAccounts ? JSON.parse(savedAccounts) : [];
-    accounts.push({
+    // Save to portal users (authenticated clients)
+    const clientUser = {
       id: orderId,
       username,
       password,
@@ -77,8 +76,8 @@ export function AdminDashboard() {
       clientName: data.client,
       email: data.email,
       orderId: orderId
-    });
-    localStorage.setItem('portal_users', JSON.stringify(accounts));
+    };
+    await dbSync.savePortalUser(clientUser);
 
     // Simulate sending email
     if (data.email) {
@@ -90,16 +89,41 @@ export function AdminDashboard() {
       setShowCredentials({ client: data.client, username, password });
     }, 300);
   };
-// ... rest of the component
+
+  const totalOrders = orders.length;
+  const inTransit = orders.filter(o => o.stage === 'IN_TRANSIT' || o.stage === 'SHIPPED' || o.stage === 'IN_TRANSIT' || o.stage === 'SHIPPED').length;
+  
+  const totalIncomeUSD = orders.reduce((sum, o) => sum + (Number(o.price) || 0), 0);
+  const totalIncomeDZD = orders.reduce((sum, o) => {
+    const priceUSD = Number(o.price) || 0;
+    const rate = Number(o.exchangeRate) || exchangeRate;
+    return sum + (priceUSD * rate);
+  }, 0);
+  const formattedIncome = totalIncomeDZD > 0 
+    ? totalIncomeDZD.toLocaleString('ar-DZ') + ' دج' 
+    : '850,000 دج';
+
+  const newRequests = orders.filter(o => o.stage === 'NEW_REQUEST' || o.stage === 'UNDER_REVIEW' || o.stage === 'SEARCHING_CAR').length;
 
   const allStats = [
-    { label: 'إجمالي الطلبات', value: '48', trend: '+12% هدا الشهر', icon: Search, roles: ['المدير العام', 'عون استقبال / مسؤول ملفات', 'مسؤول الصين'] },
-    { label: 'سيارات في الطريق', value: '12', trend: '3 تصل غداً', icon: MapPin, roles: ['المدير العام', 'مسؤول الصين'] },
-    { label: 'مداخيل الشهر', value: '850,000 دج', trend: '+5.4%', icon: DollarSign, roles: ['المدير العام', 'المحاسب'] },
-    { label: 'طلبات جديدة', value: '5', trend: 'تحتاج مراجعة', icon: Plus, roles: ['المدير العام', 'عون استقبال / مسؤول ملفات'] },
+    { label: 'إجمالي الطلبات', value: totalOrders.toString(), trend: '+12% هذا الشهر', icon: Search, roles: ['المدير العام', 'عون استقبال / مسؤول ملفات', 'مسؤول الصين'] },
+    { label: 'سيارات في الطريق', value: inTransit.toString(), trend: `${inTransit} في الشحن حالياً`, icon: MapPin, roles: ['المدير العام', 'مسؤول الصين'] },
+    { label: 'مداخيل الشهر', value: formattedIncome, trend: totalIncomeUSD > 0 ? `مجموع قيم السيارات: $${totalIncomeUSD.toLocaleString()}` : '+5.4%', icon: DollarSign, roles: ['المدير العام', 'المحاسب'] },
+    { label: 'طلبات جديدة', value: newRequests.toString(), trend: newRequests > 0 ? 'تحتاج فحص وتعميد' : 'لا توجد طلبات معلقة', icon: Plus, roles: ['المدير العام', 'عون استقبال / مسؤول ملفات'] },
   ];
 
   const filteredStats = allStats.filter(stat => stat.roles.includes(userRole));
+
+  const filteredOrders = orders.filter(order => {
+    const q = searchQuery.toLowerCase();
+    if (!q) return true;
+    return (
+      (order.client || '').toLowerCase().includes(q) ||
+      (order.car || '').toLowerCase().includes(q) ||
+      (order.vin || '').toLowerCase().includes(q) ||
+      (order.phone1 || '').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <DashboardShell>
@@ -156,6 +180,8 @@ export function AdminDashboard() {
                 <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted" />
                 <input 
                   type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="بحث برقم VIN او العميل..." 
                   className="pr-9 pl-4 py-2 bg-slate-50 border border-brand-border rounded-lg text-xs focus:ring-1 focus:ring-blue-500 w-64 outline-none"
                 />
@@ -165,7 +191,7 @@ export function AdminDashboard() {
               </button>
             </div>
           </div>
-
+ 
           <div className="overflow-x-auto">
             <table className="w-full text-right">
               <thead>
@@ -178,7 +204,7 @@ export function AdminDashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border">
-                {orders.slice(0, 5).map((order, i) => (
+                {filteredOrders.slice(0, 5).map((order, i) => (
                   <tr key={order.id || i} className="hover:bg-slate-50/50 transition-colors group">
                     <td className="px-6 py-4">
                       <div className="flex items-center gap-3">

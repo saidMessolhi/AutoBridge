@@ -5,12 +5,14 @@ import { Search, Filter, ExternalLink, Calendar, Plus, Edit2, Trash2 } from 'luc
 import { Link } from 'react-router-dom';
 import { ImportStage } from '../../types';
 import { cn, canUserSeeOrder } from '../../lib/utils';
+import { dbSync } from '../../services/dbSync';
 import { NewOrderModal } from '../../components/orders/NewOrderModal';
 import { CredentialsModal } from '../../components/orders/CredentialsModal';
 
 export function OrdersPage() {
   const [userRole, setUserRole] = React.useState('المدير العام');
   const [orders, setOrders] = React.useState<any[]>([]);
+  const [searchQuery, setSearchQuery] = React.useState('');
   const [isModalOpen, setIsModalOpen] = React.useState(false);
   const [editingOrder, setEditingOrder] = React.useState<any>(null);
   const [showCredentials, setShowCredentials] = React.useState<any>(null);
@@ -23,37 +25,34 @@ export function OrdersPage() {
       setUserRole(role);
     }
 
-    const saved = localStorage.getItem('import_orders');
-    const allOrders = saved ? JSON.parse(saved) : [
-      { id: '1', client: 'محمد فوزي', car: 'Geely Monjaro 2024', stage: ImportStage.IN_TRANSIT, date: '08/05/2024', phone1: '0550123456', passportNumber: '123456789' },
-      { id: '2', client: 'ياسين كريم', car: 'BYD Seal Premium', stage: ImportStage.PURCHASED, date: '07/05/2024', phone1: '0660987654', passportNumber: '987654321' },
-    ];
+    // Subscribe to Firestore for real-time orders with safe fallback
+    const unsubscribe = dbSync.subscribeToOrders((allOrders) => {
+      const filtered = allOrders.filter((order: any) => canUserSeeOrder(role, order.stage));
+      setOrders(filtered);
+    });
 
-    // Filter orders based on role
-    const filtered = allOrders.filter((order: any) => canUserSeeOrder(role, order.stage));
-    setOrders(filtered);
+    return () => {
+      unsubscribe();
+    };
   }, []);
 
-  React.useEffect(() => {
-    if (orders.length > 0) {
-      // We should be careful about overwriting all orders with filtered ones in localStorage
-      // In a real app, localStorage would hold all orders, and we'd filter for display
-      // Here, let's just make sure we don't accidentally delete orders from localStorage 
-      // if we are a restricted user.
-      const savedUser = localStorage.getItem('mockUser');
-      const role = savedUser ? JSON.parse(savedUser).role : 'المدير العام';
-      
-      if (role === 'المدير العام') {
-         localStorage.setItem('import_orders', JSON.stringify(orders));
-      }
-    }
-  }, [orders]);
+  const filteredOrders = orders.filter((order: any) => {
+    const q = searchQuery.toLowerCase();
+    if (!q) return true;
+    return (
+      (order.client || '').toLowerCase().includes(q) ||
+      (order.car || '').toLowerCase().includes(q) ||
+      (order.vin || '').toLowerCase().includes(q) ||
+      (order.phone1 || '').toLowerCase().includes(q)
+    );
+  });
 
-  const handleSaveOrder = (data: any) => {
+  const handleSaveOrder = async (data: any) => {
     let credentials = null;
 
     if (editingOrder) {
-      setOrders(orders.map((o: any) => o.id === editingOrder.id ? { ...o, ...data } : o));
+      const updatedOrder = { ...editingOrder, ...data };
+      await dbSync.saveOrder(updatedOrder);
     } else {
       const orderId = Math.random().toString(36).substr(2, 9);
       // Use email as username if provided, otherwise fallback to generated one
@@ -66,12 +65,11 @@ export function OrdersPage() {
         date: new Date().toLocaleDateString('ar-DZ'),
         portalUsername: username
       };
-      setOrders([newOrder, ...orders]);
+
+      await dbSync.saveOrder(newOrder);
 
       // Save to portal users
-      const savedAccounts = localStorage.getItem('portal_users');
-      const accounts = savedAccounts ? JSON.parse(savedAccounts) : [];
-      accounts.push({
+      const clientUser = {
         id: orderId,
         username,
         password,
@@ -79,8 +77,8 @@ export function OrdersPage() {
         clientName: data.client,
         email: data.email,
         orderId: orderId
-      });
-      localStorage.setItem('portal_users', JSON.stringify(accounts));
+      };
+      await dbSync.savePortalUser(clientUser);
 
       // Simulate sending email
       if (data.email) {
@@ -99,9 +97,9 @@ export function OrdersPage() {
     }
   };
 
-  const handleDelete = (id: string) => {
+  const handleDelete = async (id: string) => {
     if (confirm('هل أنت متأكد من حذف هذا الملف؟')) {
-      setOrders(orders.filter(o => o.id !== id));
+      await dbSync.deleteOrder(id);
     }
   };
 
@@ -128,6 +126,8 @@ export function OrdersPage() {
                 <Search className="w-3.5 h-3.5 absolute right-3 top-1/2 -translate-y-1/2 text-brand-muted" />
                 <input 
                   type="text" 
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
                   placeholder="بحث..." 
                   className="pr-9 pl-4 py-2 bg-slate-50 border border-brand-border rounded-lg text-xs focus:ring-1 focus:ring-blue-500 w-full md:w-80 outline-none"
                 />
@@ -150,7 +150,7 @@ export function OrdersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-brand-border">
-                {orders.map((order: any) => (
+                {filteredOrders.map((order: any) => (
                   <tr key={order.id} className="hover:bg-slate-50/50 transition-colors group">
                     <td className="px-6 py-4">
                       <div className="flex flex-col">

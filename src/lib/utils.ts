@@ -35,5 +35,38 @@ export function canUserSeeOrder(role: string, stage: string): boolean {
   };
 
   const allowedStages = stageRoles[role];
-  return allowedStages ? allowedStages.includes(stage) : true;
+  return allowedStages ? allowedStages.includes(stage as ImportStage) : true;
+}
+
+export function canUserUpdateStage(role: string, stage: ImportStage): boolean {
+  if (role === 'المدير العام') return true;
+
+  const stageUpdaters: Record<string, ImportStage[]> = {
+    'المحاسب': [
+      ImportStage.DEPOSIT_PAID,
+      ImportStage.FINAL_PAYMENT
+    ],
+    'مسؤول الصين': [
+      ImportStage.UNDER_REVIEW,
+      ImportStage.SEARCHING_CAR,
+      ImportStage.CLIENT_APPROVED,
+      ImportStage.PURCHASED
+    ],
+    'مسؤول اللوجستيك': [
+      ImportStage.INLAND_TRANSPORT,
+      ImportStage.SHIPPED,
+      ImportStage.IN_TRANSIT
+    ],
+    'المخلص الجمركي': [
+      ImportStage.ARRIVED_PORT,
+      ImportStage.CUSTOMS_CLEARANCE
+    ],
+    'عون استقبال / مسؤول ملفات': [
+      ImportStage.NEW_REQUEST,
+      ImportStage.DELIVERED
+    ]
+  };
+
+  const updatableStages = stageUpdaters[role];
+  return updatableStages ? updatableStages.includes(stage) : false;
 }

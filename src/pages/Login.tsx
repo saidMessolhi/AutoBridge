@@ -2,10 +2,24 @@ import { motion } from 'motion/react';
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Car, Lock, Mail, ArrowLeft } from 'lucide-react';
+import { dbSync } from '../services/dbSync';
 
 export function Login() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [portalUsers, setPortalUsers] = useState<any[]>([]);
   const navigate = useNavigate();
+
+  React.useEffect(() => {
+    // Subscribe to portal users from Firestore/localStorage in real-time
+    const unsubscribe = dbSync.subscribeToPortalUsers((users) => {
+      setPortalUsers(users);
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   const mockAccounts = [
     { email: 'admin@autobridge.dz', role: 'المدير العام', name: 'أحمد بن علي', path: '/admin/dashboard' },
@@ -19,40 +33,73 @@ export function Login() {
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    
-    // Check hardcoded accounts first
-    const account = mockAccounts.find(a => a.email === email);
-    if (account) {
-      localStorage.setItem('mockUser', JSON.stringify(account));
-      navigate(account.path);
+    setErrorMsg('');
+
+    if (!email) {
+      setErrorMsg('فضلاً أدخل البريد الإلكتروني أو اسم المستخدم.');
       return;
     }
 
-    // Check dynamic portal users (clients)
-    const savedAccounts = localStorage.getItem('portal_users');
-    if (savedAccounts) {
-      const accounts = JSON.parse(savedAccounts);
-      // Allowing login with username OR email in the input field
-      const userAccount = accounts.find((a: any) => a.username === email || a.email === email);
-      if (userAccount) {
-        localStorage.setItem('mockUser', JSON.stringify({
-          email: userAccount.username,
-          role: 'زبون استيراد',
-          name: userAccount.clientName,
-          path: '/portal/dashboard',
-          orderId: userAccount.orderId
-        }));
-        navigate('/portal/dashboard');
+    // 1. Check dynamic portal users (including staff) loaded in real-time from Firestore
+    const userAccount = portalUsers.find(
+      (a: any) => (a.username || '').toLowerCase() === email.trim().toLowerCase() || 
+                  (a.email || '').toLowerCase() === email.trim().toLowerCase()
+    );
+
+    if (userAccount) {
+      // Check status
+      if (userAccount.status === 'موقف' || userAccount.status === 'معلق' || userAccount.status === 'غير نشط') {
+        setErrorMsg('عذراً، لقد تم إيقاف هذا الحساب أو تعليقه مؤقتاً من قبل الإدارة.');
         return;
       }
+
+      // Check password
+      if (password && userAccount.password && userAccount.password !== password) {
+        setErrorMsg('كلمة المرور التي أدخلتها غير صحيحة.');
+        return;
+      }
+
+      // Successful login of account
+      const mappedRole = userAccount.role;
+      const mappedPath = mappedRole === 'زبون استيراد' ? '/portal/dashboard' : (mappedRole === 'المحاسب' ? '/admin/finance' : '/admin/dashboard');
+
+      localStorage.setItem('mockUser', JSON.stringify({
+        email: userAccount.email || userAccount.username,
+        role: mappedRole,
+        name: userAccount.name || userAccount.clientName || 'مستخدم',
+        path: mappedPath,
+        orderId: userAccount.orderId
+      }));
+
+      navigate(mappedPath);
+      return;
     }
 
-    // Default fallback
-    if (email.includes('admin')) navigate('/admin/dashboard');
-    else navigate('/portal/dashboard');
+    // 2. Fallbacks
+    const fallbackMock = mockAccounts.find(a => a.email.toLowerCase() === email.trim().toLowerCase());
+    if (fallbackMock) {
+      localStorage.setItem('mockUser', JSON.stringify(fallbackMock));
+      navigate(fallbackMock.path);
+      return;
+    }
+
+    setErrorMsg('المستخدم غير مسجل بالمنصة.');
   };
 
   const quickLogin = (account: typeof mockAccounts[0]) => {
+    setErrorMsg('');
+    
+    // Look up in portalUsers to verify status first!
+    const userAccount = portalUsers.find(
+      (a: any) => (a.username || '').toLowerCase() === account.email.toLowerCase() ||
+                  (a.email || '').toLowerCase() === account.email.toLowerCase()
+    );
+
+    if (userAccount && (userAccount.status === 'موقف' || userAccount.status === 'معلق' || userAccount.status === 'غير نشط')) {
+      setErrorMsg(`عذراً، حساب (${account.name}) معطل حالياً من طرف المدير العام.`);
+      return;
+    }
+
     localStorage.setItem('mockUser', JSON.stringify(account));
     navigate(account.path);
   };
@@ -73,6 +120,12 @@ export function Login() {
             <h1 className="text-2xl font-black text-slate-900 tracking-tight">AutoBridge SaaS</h1>
             <p className="text-[10px] text-brand-muted mt-2 font-black uppercase tracking-[0.2em]">تسجيل الدخول للمنصة</p>
           </div>
+
+          {errorMsg && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-600 rounded-xl text-[11px] font-bold text-center leading-relaxed">
+              {errorMsg}
+            </div>
+          )}
 
           <form onSubmit={handleLogin} className="space-y-4">
             <div className="space-y-1.5">
@@ -96,6 +149,8 @@ export function Login() {
                 <Lock className="absolute right-4 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
                 <input 
                   type="password" 
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   className="w-full pr-12 pl-4 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-xs focus:ring-1 focus:ring-blue-500 outline-none transition-all"
                   required

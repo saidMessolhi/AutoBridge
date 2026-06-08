@@ -2,6 +2,9 @@ import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Car, User, Globe, ChevronLeft, Save } from 'lucide-react';
 import { ImportStage } from '../../types';
+import { dbSync } from '../../services/dbSync';
+import { canUserUpdateStage } from '../../lib/utils';
+import { STAGE_LABELS } from '../../constants';
 
 interface NewOrderModalProps {
   isOpen: boolean;
@@ -11,6 +14,11 @@ interface NewOrderModalProps {
 }
 
 export function NewOrderModal({ isOpen, onClose, onSave, initialData }: NewOrderModalProps) {
+  const systemRate = dbSync.getExchangeRate();
+  const [userRole, setUserRole] = useState<string>(() => {
+    const savedUser = localStorage.getItem('mockUser');
+    return savedUser ? JSON.parse(savedUser).role : 'المدير العام';
+  });
   const [formData, setFormData] = useState({
     client: initialData?.client || '',
     email: initialData?.email || '',
@@ -23,7 +31,8 @@ export function NewOrderModal({ isOpen, onClose, onSave, initialData }: NewOrder
     vin: initialData?.vin || '',
     stage: initialData?.stage || ImportStage.DEPOSIT_PAID,
     source: initialData?.source || 'China',
-    price: initialData?.price || ''
+    price: initialData?.price || '',
+    exchangeRate: initialData?.exchangeRate || systemRate
   });
 
   React.useEffect(() => {
@@ -40,10 +49,28 @@ export function NewOrderModal({ isOpen, onClose, onSave, initialData }: NewOrder
         vin: initialData.vin || '',
         stage: initialData.stage || ImportStage.DEPOSIT_PAID,
         source: initialData.source || 'China',
-        price: initialData.price || ''
+        price: initialData.price || '',
+        exchangeRate: initialData.exchangeRate || dbSync.getExchangeRate()
+      });
+    } else {
+      // Reset for new creation
+      setFormData({
+        client: '',
+        email: '',
+        phone1: '',
+        phone2: '',
+        address: '',
+        city: '',
+        passportNumber: '',
+        car: '',
+        vin: '',
+        stage: ImportStage.DEPOSIT_PAID,
+        source: 'China',
+        price: '',
+        exchangeRate: dbSync.getExchangeRate()
       });
     }
-  }, [initialData]);
+  }, [initialData, isOpen]);
 
   if (!isOpen) return null;
 
@@ -210,16 +237,56 @@ export function NewOrderModal({ isOpen, onClose, onSave, initialData }: NewOrder
                   />
                 </div>
 
+                <div className="space-y-1.5">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">سعر صرف الدولار المعتمد للطلب (دج)</label>
+                  <input 
+                    type="number" 
+                    value={formData.exchangeRate}
+                    onChange={(e) => setFormData({...formData, exchangeRate: Number(e.target.value)})}
+                    placeholder="مثلاً: 220"
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-xs font-bold text-blue-600 font-mono"
+                  />
+                </div>
+
+                {/* Real-time DZD breakdown */}
+                {formData.price && formData.exchangeRate && (
+                  <div className="md:col-span-2 bg-blue-50/50 border border-blue-100 rounded-2xl p-5 space-y-4 text-slate-700" dir="rtl">
+                    <h5 className="text-[10px] font-black text-blue-900 uppercase tracking-wider">تفاصيل القيمة بالدينار الجزائري (ثابتة للطلب)</h5>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-center">
+                      <div className="bg-white p-3 rounded-xl border border-blue-100/50">
+                        <p className="text-[9px] text-gray-400 font-bold">إجمالي قيمة السيارة</p>
+                        <p className="text-sm font-black text-blue-900 mt-1">{(Number(formData.price) * Number(formData.exchangeRate)).toLocaleString('ar-DZ')} دج</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-xl border border-blue-100/50">
+                        <p className="text-[9px] text-emerald-600 font-bold">قيمة العربون (30%)</p>
+                        <p className="text-sm font-black text-emerald-600 mt-1">{Math.round(Number(formData.price) * Number(formData.exchangeRate) * 0.3).toLocaleString('ar-DZ')} دج</p>
+                      </div>
+                      <div className="bg-white p-3 rounded-xl border border-blue-100/50">
+                        <p className="text-[9px] text-amber-600 font-bold">المبلغ المتبقي (70%)</p>
+                        <p className="text-sm font-black text-amber-600 mt-1">{Math.round(Number(formData.price) * Number(formData.exchangeRate) * 0.7).toLocaleString('ar-DZ')} دج</p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
                 <div className="md:col-span-2 space-y-1.5">
-                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">حالة الطلب الحالية</label>
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right block">حالة الطلب الحالية (الخيارات المتاحة لدورك الجاري: {userRole})</label>
                   <select 
                     value={formData.stage}
                     onChange={(e) => setFormData({...formData, stage: e.target.value as ImportStage})}
-                    className="w-full px-4 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-xs font-bold text-blue-600"
+                    className="w-full px-4 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-xs font-bold text-blue-600 text-right"
                   >
-                    {Object.values(ImportStage).map((stage) => (
-                      <option key={stage} value={stage}>{stage}</option>
-                    ))}
+                    {Object.values(ImportStage).map((stage) => {
+                      const isAllowed = canUserUpdateStage(userRole, stage);
+                      // Admin can choose anything; or if this stage is already the current stage of the order, keep it visible
+                      const shouldShow = isAllowed || formData.stage === stage;
+                      if (!shouldShow) return null;
+                      return (
+                        <option key={stage} value={stage}>
+                          {STAGE_LABELS[stage]}
+                        </option>
+                      );
+                    })}
                   </select>
                 </div>
               </div>

@@ -5,7 +5,8 @@ import { OrderLifecycle } from '../../components/orders/OrderLifecycle';
 import { DocumentCenter } from '../../components/documents/DocumentCenter';
 import { ImportStage } from '../../types';
 import { STAGE_LABELS } from '../../constants';
-import { cn, canUserSeeOrder } from '../../lib/utils';
+import { cn, canUserSeeOrder, canUserUpdateStage } from '../../lib/utils';
+import { dbSync } from '../../services/dbSync';
 import { 
   ArrowRight, 
   MapPin, 
@@ -15,7 +16,8 @@ import {
   AlertCircle,
   Edit2,
   Share2,
-  Save
+  Save,
+  Lock
 } from 'lucide-react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
 import { NewOrderModal } from '../../components/orders/NewOrderModal';
@@ -24,17 +26,22 @@ export function OrderDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
   const [order, setOrder] = React.useState<any>(null);
+  const [systemRate, setSystemRate] = React.useState<number>(220);
   const [isEditModalOpen, setIsEditModalOpen] = React.useState(false);
   const [isStatusMenuOpen, setIsStatusMenuOpen] = React.useState(false);
+  const [userRole, setUserRole] = React.useState<string>(() => {
+    const savedUser = localStorage.getItem('mockUser');
+    return savedUser ? JSON.parse(savedUser).role : 'المدير العام';
+  });
 
   React.useEffect(() => {
     const savedUser = localStorage.getItem('mockUser');
     const role = savedUser ? JSON.parse(savedUser).role : 'المدير العام';
+    setUserRole(role);
 
-    const saved = localStorage.getItem('import_orders');
-    if (saved) {
-      const orders = JSON.parse(saved);
-      const found = orders.find((o: any) => o.id === id);
+    // Subscribe to real-time orders in Firestore
+    const unsubscribe = dbSync.subscribeToOrders((allOrders) => {
+      const found = allOrders.find((o: any) => o.id === id);
       if (found) {
         if (!canUserSeeOrder(role, found.stage)) {
           alert('ليس لديك صلاحية للوصول لهذا الطلب');
@@ -43,29 +50,37 @@ export function OrderDetails() {
         }
         setOrder(found);
       }
-    }
+    });
+
+    const unsubscribeRate = dbSync.subscribeToExchangeRate((rate) => {
+      setSystemRate(rate);
+    });
+
+    return () => {
+      unsubscribe();
+      unsubscribeRate();
+    };
   }, [id, navigate]);
 
-  const updateOrderInStorage = (updatedOrder: any) => {
-    const saved = localStorage.getItem('import_orders');
-    if (saved) {
-      const orders = JSON.parse(saved);
-      const updatedOrders = orders.map((o: any) => o.id === id ? updatedOrder : o);
-      localStorage.setItem('import_orders', JSON.stringify(updatedOrders));
-      setOrder(updatedOrder);
-    }
+  const updateOrderInStorage = async (updatedOrder: any) => {
+    await dbSync.saveOrder(updatedOrder);
+    setOrder(updatedOrder);
   };
 
-  const handleStatusUpdate = (newStage: ImportStage) => {
+  const handleStatusUpdate = async (newStage: ImportStage) => {
+    if (!canUserUpdateStage(userRole, newStage)) {
+      alert(`عذراً، لا تمتلك الصلاحيات الكافية لتعديل الحالة إلى "${STAGE_LABELS[newStage]}" بصفتك ${userRole}.`);
+      return;
+    }
     const updated = { ...order, stage: newStage };
-    updateOrderInStorage(updated);
+    await updateOrderInStorage(updated);
     setIsStatusMenuOpen(false);
     alert('تم تحديث حالة الطلب بنجاح');
   };
 
-  const handleSaveEdit = (data: any) => {
+  const handleSaveEdit = async (data: any) => {
     const updated = { ...order, ...data };
-    updateOrderInStorage(updated);
+    await updateOrderInStorage(updated);
     setIsEditModalOpen(false);
   };
 
@@ -113,17 +128,30 @@ export function OrderDetails() {
               </button>
               
               {isStatusMenuOpen && (
-                <div className="absolute right-0 bottom-full mb-2 w-64 bg-white border border-brand-border rounded-xl shadow-xl z-50 overflow-hidden py-2 max-h-64 overflow-y-auto">
-                  <p className="px-4 py-2 text-[10px] font-bold text-slate-400 uppercase border-b border-slate-50 mb-1">اختر الحالة الجديدة</p>
-                  {Object.values(ImportStage).map((stage) => (
-                    <button
-                      key={stage}
-                      onClick={() => handleStatusUpdate(stage)}
-                      className={`w-full text-right px-4 py-2 text-[11px] font-bold hover:bg-slate-50 transition-colors ${order.stage === stage ? 'text-blue-600 bg-blue-50/50' : 'text-slate-700'}`}
-                    >
-                      {stage}
-                    </button>
-                  ))}
+                <div className="absolute left-0 top-full mt-2 w-64 bg-white border border-brand-border rounded-xl shadow-xl z-50 overflow-hidden py-2 max-h-64 overflow-y-auto" dir="rtl">
+                  <p className="px-4 py-2 text-[10px] font-black text-slate-400 uppercase border-b border-slate-50 mb-1 text-right">الخيارات المتاحة لدورك الجاري ({userRole})</p>
+                  {Object.values(ImportStage).map((stage) => {
+                    const isAllowed = canUserUpdateStage(userRole, stage);
+                    return (
+                      <button
+                        key={stage}
+                        disabled={!isAllowed}
+                        onClick={() => handleStatusUpdate(stage)}
+                        className={`w-full text-right px-4 py-2.5 text-xs font-bold flex justify-between items-center transition-colors ${
+                          order.stage === stage 
+                            ? 'text-blue-600 bg-blue-50/50 hover:bg-blue-100/50' 
+                            : isAllowed 
+                              ? 'text-slate-700 hover:bg-slate-50' 
+                              : 'text-slate-300 opacity-50 cursor-not-allowed bg-slate-50/40'
+                        }`}
+                      >
+                        <span>{STAGE_LABELS[stage]}</span>
+                        {!isAllowed && (
+                          <Lock className="w-3 h-3 text-slate-300" />
+                        )}
+                      </button>
+                    );
+                  })}
                 </div>
               )}
             </div>
@@ -134,7 +162,7 @@ export function OrderDetails() {
           <div className="flex justify-between items-center mb-6">
             <h3 className="text-xs font-bold text-slate-800 uppercase tracking-[0.2em]">مراحل التنفيذ الحالية</h3>
             <div className="text-[10px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full border border-blue-100 uppercase">
-              {order.stage}
+              {STAGE_LABELS[order.stage as ImportStage] || order.stage}
             </div>
           </div>
           <OrderLifecycle currentStage={order.stage} />
@@ -150,7 +178,9 @@ export function OrderDetails() {
               <div className="grid grid-cols-2 md:grid-cols-3 gap-6">
                  {[
                    { label: 'النوع والمديل', value: order.car },
-                   { label: 'سعر الطلب', value: `${order.price || 0} $` },
+                   { label: 'سعر الطلب بالدولار', value: `${(Number(order.price) || 0).toLocaleString()} $` },
+                   { label: 'سعر صرف الطلب', value: `${order.exchangeRate || systemRate} دج` },
+                   { label: 'القيمة بالدينار', value: `${((Number(order.price) || 0) * (Number(order.exchangeRate) || systemRate)).toLocaleString('ar-DZ')} دج` },
                    { label: 'المصدر', value: order.source },
                    { label: 'الزبون', value: order.client },
                    { label: 'الهاتف', value: order.phone1 },
@@ -211,17 +241,18 @@ export function OrderDetails() {
               <div className="space-y-4">
                  <div className="flex justify-between text-xs">
                    <span className="text-slate-500 font-medium">إجمالي المشروع</span>
-                   <span className="font-bold text-white tracking-widest">$38,400.00</span>
+                   <span className="font-bold text-white tracking-wider">${(Number(order.price) || 0).toLocaleString()} ({( (Number(order.price) || 0) * (Number(order.exchangeRate) || systemRate) ).toLocaleString('ar-DZ')} دج)</span>
                  </div>
                  <div className="flex justify-between text-xs">
                    <span className="text-slate-500 font-medium">المدفوع (العربون 30%)</span>
-                   <span className="text-emerald-400 font-bold uppercase tracking-tighter">PAID $12,400</span>
+                   <span className="text-emerald-400 font-bold uppercase tracking-tighter">PAID {Math.round((Number(order.price) || 0) * (Number(order.exchangeRate) || systemRate) * 0.3).toLocaleString('ar-DZ')} دج (عربون)</span>
                  </div>
                  <div className="h-[1px] bg-white/5 my-2"></div>
                  <div className="flex justify-between items-end">
                     <div>
                       <p className="text-[10px] text-slate-500 font-bold uppercase tracking-wider mb-1">المتبقي للدفع</p>
-                      <p className="text-2xl font-black text-red-500 tracking-tighter">$26,000.00</p>
+                      <p className="text-2xl font-black text-red-500 tracking-tighter">{Math.round((Number(order.price) || 0) * (Number(order.exchangeRate) || systemRate) * 0.7).toLocaleString('ar-DZ')} دج</p>
+                      <p className="text-[9px] text-slate-400 mt-1 font-bold">سعر الصرف المحجوز للطلب: {order.exchangeRate || systemRate} دج</p>
                     </div>
                     <AlertCircle className="w-8 h-8 text-white/5" />
                  </div>
@@ -232,7 +263,7 @@ export function OrderDetails() {
             </div>
 
             {/* Document Side Center */}
-            <DocumentCenter />
+            <DocumentCenter orderId={order.id} />
           </div>
         </div>
       </div>

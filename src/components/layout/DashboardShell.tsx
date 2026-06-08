@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { cn } from '../../lib/utils';
+import { dbSync } from '../../services/dbSync';
 
 interface SidebarItem {
   icon: any;
@@ -38,18 +39,42 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [user, setUser] = React.useState({ name: 'أحمد بن علي', role: 'المدير العام', email: '' });
+  const [notifications, setNotifications] = React.useState<any[]>([]);
+  const [isNotificationsOpen, setIsNotificationsOpen] = React.useState(false);
 
   React.useEffect(() => {
     const savedUser = localStorage.getItem('mockUser');
+    let currentUser = null;
     if (savedUser) {
       const parsed = JSON.parse(savedUser);
-      setUser({ name: parsed.name, role: parsed.role, email: parsed.email });
+      currentUser = { name: parsed.name, role: parsed.role, email: parsed.email };
+      setUser(currentUser);
     }
+
+    // Subscribe to all notifications in real-time matching this user
+    const unsubscribe = dbSync.subscribeToNotifications(currentUser, (notifs) => {
+      setNotifications(notifs);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const handleLogout = () => {
     localStorage.removeItem('mockUser');
     navigate('/login');
+  };
+
+  const unreadCount = React.useMemo(() => {
+    return notifications.filter(n => !n.read).length;
+  }, [notifications]);
+
+  const handleMarkAllRead = async () => {
+    await dbSync.markAllNotificationsAsRead(user);
+  };
+
+  const handleMarkRead = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    await dbSync.markNotificationAsRead(id);
   };
 
   const filteredSidebarItems = sidebarItems.filter(item => {
@@ -126,10 +151,83 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           </div>
           
           <div className="flex items-center gap-6">
-            <button className="p-2 text-slate-400 hover:text-slate-600 relative">
-              <Bell className="w-5 h-5" />
-              <span className="absolute top-2 right-2 w-1.5 h-1.5 bg-blue-500 rounded-full border-2 border-white"></span>
-            </button>
+            <div className="relative">
+              <button 
+                onClick={() => setIsNotificationsOpen(!isNotificationsOpen)}
+                className="p-2 text-slate-400 hover:text-slate-600 relative transition-transform active:scale-95"
+              >
+                <Bell className="w-5 h-5" />
+                {unreadCount > 0 && (
+                  <span className="absolute top-1.5 right-1.5 w-4 h-4 bg-red-500 rounded-full text-[9px] font-black text-white flex items-center justify-center border border-white">
+                    {unreadCount}
+                  </span>
+                )}
+              </button>
+
+              {isNotificationsOpen && (
+                <>
+                  <div 
+                    className="fixed inset-0 z-40" 
+                    onClick={() => setIsNotificationsOpen(false)}
+                  />
+                  <div className="absolute left-0 mt-2 w-80 sm:w-96 bg-white border border-slate-100 rounded-2xl shadow-2xl z-50 overflow-hidden leading-snug">
+                    <div className="p-4 bg-slate-50 border-b border-brand-border flex justify-between items-center">
+                      <div className="flex items-center gap-2">
+                        <span className="font-extrabold text-xs text-slate-800">إشعارات النظام المركزي</span>
+                        {unreadCount > 0 && (
+                          <span className="bg-red-50 text-red-600 text-[9px] font-black px-1.5 py-0.5 rounded-full border border-red-100">
+                            {unreadCount} جديد
+                          </span>
+                        )}
+                      </div>
+                      {unreadCount > 0 && (
+                        <button 
+                          onClick={handleMarkAllRead}
+                          className="text-[10px] font-bold text-blue-600 hover:underline"
+                        >
+                          تعيين الكل كمقروء
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-gray-50">
+                      {notifications.length > 0 ? (
+                        notifications.map((notif) => (
+                          <div 
+                            key={notif.id} 
+                            className={cn(
+                              "p-4 hover:bg-slate-50/50 transition-colors flex gap-3 text-right leading-relaxed",
+                              !notif.read ? "bg-slate-50/40" : ""
+                            )}
+                          >
+                            <div className="flex-1">
+                              <div className="flex justify-between items-start gap-2">
+                                <h5 className={cn("text-xs font-black", !notif.read ? "text-slate-900" : "text-slate-700")}>{notif.title}</h5>
+                                <span className="text-[8px] text-slate-400 font-mono tracking-tighter whitespace-nowrap">{notif.date}</span>
+                              </div>
+                              <p className="text-[10px] text-slate-500 mt-1">{notif.message}</p>
+                              
+                              {!notif.read && (
+                                <button 
+                                  onClick={(e) => handleMarkRead(notif.id, e)}
+                                  className="text-[9px] font-bold text-blue-600 mt-1.5 hover:underline block"
+                                >
+                                  ✓ تعليم كقروء
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="p-8 text-center text-xs text-slate-400 font-medium">
+                          لا توجد إشعارات حالياً
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
             <div className="flex items-center gap-3 border-r pr-6 border-slate-200">
               <div className="text-left leading-none">
                 <p className="text-sm font-bold text-slate-900">{user.name}</p>

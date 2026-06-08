@@ -1,5 +1,8 @@
+import React, { useState } from 'react';
 import { motion } from 'motion/react';
 import { DashboardShell } from '../../components/layout/DashboardShell';
+import { db } from '../../services/firebase';
+import { dbSync } from '../../services/dbSync';
 import { 
   User, 
   Shield, 
@@ -8,10 +11,37 @@ import {
   Database,
   Cloud,
   ChevronRight,
-  Save
+  Save,
+  ExternalLink,
+  CheckCircle,
+  XCircle,
+  AlertTriangle,
+  RefreshCw
 } from 'lucide-react';
 
 export function Settings() {
+  const [seeding, setSeeding] = useState(false);
+  const [seedSuccess, setSeedSuccess] = useState<boolean | null>(null);
+
+  const handleManualSeed = async () => {
+    setSeeding(true);
+    setSeedSuccess(null);
+    try {
+      const result = await dbSync.seedDatabase();
+      setSeedSuccess(result);
+      if (result) {
+        alert('تم ملء قاعدة البيانات بالبيانات البدئية بنجاح! ستظهر الجداول الكودية (Collections) الآن في لوحة تحكم Firebase.');
+      } else {
+        alert('حدث خطأ أثناء ملء قاعدة البيانات. الرجاء التأكد من اتصال الإنترنت وقواعد الحماية.');
+      }
+    } catch (e) {
+      console.error(e);
+      setSeedSuccess(false);
+    } finally {
+      setSeeding(false);
+    }
+  };
+
   return (
     <DashboardShell>
       <div className="max-w-4xl space-y-8">
@@ -46,7 +76,7 @@ export function Settings() {
                  <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.3em]">تفضيلات المنصة</h4>
                  
                  {[
-                   { icon: Bell, title: 'الإشعارات التلقائية', desc: 'استلام تنبيهات عند تغير حالة الطلب أو وصول سيارة للميناء', enabled: true },
+                   { icon: Bell, title: 'الإشعارات التلقائية', desc: 'استلاف تنبيهات عند تغير حالة الطلب أو وصول سيارة للميناء', enabled: true },
                    { icon: Shield, title: 'التحقق بخطوتين (2FA)', desc: 'تأمين حسابك عبر رمز يصل لهاتفك عند الدخول', enabled: false },
                    { icon: Globe, title: 'لغة الواجهة', desc: 'اختر اللغة المفضلة للوحة التحكم (العربية/الانجليزية)', extra: 'العربية' },
                  ].map((item, i) => (
@@ -78,6 +108,98 @@ export function Settings() {
                     <Save className="w-4 h-4" /> حفظ التغييرات
                  </button>
               </div>
+           </div>
+        </div>
+
+        {/* Firebase & Firestore Monitor */}
+        <div className="bg-white rounded-xl border border-brand-border shadow-sm overflow-hidden">
+           <div className="p-6 border-b border-brand-border bg-slate-50/50 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-[0.2em] flex items-center gap-2">
+                <Database className="w-4 h-4 text-blue-600" />
+                إعدادات قاعدة بيانات Cloud Firestore
+              </h3>
+              <span className={`self-start sm:self-auto px-3 py-1 text-[10px] font-bold rounded-full flex items-center gap-1.5 ${db ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-amber-50 text-amber-700 border border-amber-100'}`}>
+                {db ? (
+                  <>
+                    <CheckCircle className="w-3.5 h-3.5 text-emerald-500" /> متصل بقاعدة البيانات السحابية
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> وضع التجربة بدون سحابة
+                  </>
+                )}
+              </span>
+           </div>
+           
+           <div className="p-8 space-y-6">
+              <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100/70 space-y-3">
+                <p className="text-xs text-blue-800 font-bold leading-relaxed flex items-center gap-1.5">
+                  💡 هامة لمعاينة البيانات (Collections):
+                </p>
+                <div className="text-[11px] text-blue-700/90 space-y-2 leading-relaxed">
+                  <p>
+                    تستخدم هذه النسخة آلية تعدد قواعد البيانات في Firebase لضمان العزل وسرعة الاستجابة. عند فتح لوحة تحكم Firebase Firestore، لن تجد الجداول في قاعدة البيانات الافتراضية <strong>(default)</strong>.
+                  </p>
+                  <p>
+                    يرجى النقر على القائمة المنسدلة لقواعد البيانات في أعلى شاشة Firestore في Firebase، واختيار معرف قاعدة بيانات التطبيق المخصص التالي لتشاهد الجداول:
+                  </p>
+                  <div className="bg-slate-900 text-slate-100 p-2.5 rounded-lg font-mono text-[11px] text-center select-all flex items-center justify-between gap-2 border border-slate-800 shadow-inner">
+                    <span className="flex-1 text-center font-bold tracking-wider select-all">ai-studio-93307131-a6d8-468b-948f-24951bce9fba</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                <div className="p-4 bg-slate-50 rounded-xl border border-brand-border">
+                  <span className="text-[9px] font-bold text-brand-muted uppercase">معرف المشروع (Project ID)</span>
+                  <p className="font-mono font-bold text-slate-800 mt-1">crucial-incentive-th7sp</p>
+                </div>
+                <div className="p-4 bg-slate-50 rounded-xl border border-brand-border">
+                  <span className="text-[9px] font-bold text-brand-muted uppercase">معرف قاعدة البيانات (Database ID)</span>
+                  <p className="font-mono font-bold text-slate-800 mt-1">ai-studio-93307131-a6d8-468b-948f-24951bce9fba</p>
+                </div>
+              </div>
+
+              <div className="flex flex-col md:flex-row gap-4 pt-4 border-t border-brand-border">
+                <button
+                  type="button"
+                  onClick={handleManualSeed}
+                  disabled={seeding || !db}
+                  className={`flex items-center justify-center gap-2 px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all shadow-md flex-1 ${
+                    !db 
+                      ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                      : seeding
+                        ? 'bg-blue-100 text-blue-500'
+                        : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg shadow-blue-100'
+                  }`}
+                >
+                  <RefreshCw className={`w-4 h-4 ${seeding ? 'animate-spin' : ''}`} />
+                  {seeding ? 'جاري تهيئة وحقن الجداول...' : 'حقن البيانات الافتراضية (Seed Database)'}
+                </button>
+
+                <a
+                  href="https://console.firebase.google.com/project/crucial-incentive-th7sp/firestore/databases/ai-studio-93307131-a6d8-468b-948f-24951bce9fba/data"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 bg-slate-900 text-white px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider hover:bg-slate-800 transition-all shadow-lg shadow-slate-200 flex-1"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  رابط معاينة قاعدة البيانات في Firebase
+                </a>
+              </div>
+
+              {seedSuccess === true && (
+                <p className="text-xs text-emerald-600 font-bold text-center flex items-center justify-center gap-1.5 mt-2 bg-emerald-50/50 p-2.5 rounded-lg border border-emerald-100">
+                  <CheckCircle className="w-4 h-4" />
+                  تمت تهيئة الجداول وحقن البيانات بنجاح! ستظهر لك الجداول فوراً في لوحة التحكم عند تحديث صفحة الـ Firebase Console.
+                </p>
+              )}
+              {seedSuccess === false && (
+                <p className="text-xs text-red-600 font-bold text-center flex items-center justify-center gap-1.5 mt-2 bg-red-50/50 p-2.5 rounded-lg border border-red-100">
+                  <XCircle className="w-4 h-4" />
+                  تعذر حقن البيانات. تأكد من اتصال الإنترنيت وقواعد الحماية.
+                </p>
+              )}
            </div>
         </div>
 
