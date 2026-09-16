@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="ab-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="16" fill="url(#ab-grad)" />
+  <!-- Bridge and Car stylized symbol -->
+  <path d="M12 44C20 36 44 36 52 44" stroke="#93c5fd" stroke-width="4" stroke-linecap="round" />
+  <path d="M16 42V48M48 42V48M26 38.5V48M38 38.5V48" stroke="#93c5fd" stroke-width="3" stroke-linecap="round" />
+  <!-- Modern Vehicle outline -->
+  <path d="M22 28L26 21H38L42 28M18 33H46C47.6569 33 49 31.6569 49 30V29C49 28.4477 48.5523 28 48 28H16C15.4477 28 15 28.4477 15 29V30C15 31.6569 16.3431 33 18 33Z" stroke="#ffffff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="23" cy="33" r="3" fill="#ffffff" />
+  <circle cx="41" cy="33" r="3" fill="#ffffff" />
+</svg>
